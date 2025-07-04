@@ -20,6 +20,11 @@ import logging
 from kfp import compiler, dsl
 from kfp.kubernetes import add_node_selector_json, add_toleration_json
 
+
+
+
+
+
 PYTHON_BASE_IMAGE = "registry.redhat.io/ubi9/python-312@sha256:e80ff3673c95b91f0dafdbe97afb261eab8244d7fd8b47e20ffcbcfee27fb168"
 
 # Workbench Runtime Image: Pytorch with CUDA and Python 3.11 (UBI 9)
