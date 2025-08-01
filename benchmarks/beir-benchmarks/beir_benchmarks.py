@@ -23,6 +23,8 @@ from llama_stack.distribution.library_client import LlamaStackAsLibraryClient
 from llama_stack.apis.tools import RAGQueryConfig
 from llama_stack_client.types import Document
 
+from warnings import filterwarnings
+
 import numpy as np
 import pytrec_eval
 
@@ -38,6 +40,9 @@ DEFAULT_BATCH_SIZE = 150
 """
 TODO: Add an arg for specifying the benchmark type when new benchmarks are added.
 """
+
+# FutureWarning interfering with logging
+filterwarnings("ignore", category=FutureWarning)
 
 
 def parse_args():
@@ -392,7 +397,9 @@ if __name__ == "__main__":
         )
 
     # Run LlamaStack Client
-    llama_stack_client = LlamaStackAsLibraryClient("./run.yaml")
+    llama_stack_client = LlamaStackAsLibraryClient(
+        os.path.join(pathlib.Path(__file__).parent.absolute(), "run.yaml")
+    )
     llama_stack_client.initialize()
 
     """
