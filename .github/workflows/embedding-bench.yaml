@@ -51,6 +51,7 @@ jobs:
           uv pip install -r benchmarks/beir-benchmarks/requirements.txt
 
           uv run --with llama-stack llama stack build --distro starter --image-type venv
+          uv pip install openai==1.98.0
 
       - name: Run the Benchmark
         id: benchmark
