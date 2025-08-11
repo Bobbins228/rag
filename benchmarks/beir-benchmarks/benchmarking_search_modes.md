@@ -1,7 +1,7 @@
-# Benchmarking embedding models with BEIR Datasets and Llama Stack
+# Benchmarking Vector DB search modes with BEIR Datasets and Llama Stack
 
 ## Purpose
-The purpose of this script is to compare retrieval accuracy between embedding models using standardized information retrieval benchmarks from the [BEIR](https://github.com/beir-cellar/beir) framework.
+The purpose of this script is to compare retrieval accuracy between different vector db search modes using standardized information retrieval benchmarks from the [BEIR](https://github.com/beir-cellar/beir) framework.
 
 ## Setup
 For the examples we use Ollama to serve the model which can easily be swapped for an inference provider of your choice.
@@ -24,38 +24,71 @@ Prepare your environment by running:
 llama stack build --template starter --image-type venv
 ```
 
+Setup Milvus Remote
+``` bash
+docker compose -f resources/docker-compose.yaml up -d
+```
+
 ## Running Instructions
 
 ### Basic Usage
 To run the script with default settings:
 
 ```bash
-# Update OLLAMA_INFERENCE_MODEL to your preferred model or similar for other inference providers
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run python beir_benchmarks.py
+OLLAMA_URL=http://localhost:11434 ENABLE_MILVUS_REMOTE=milvus-remote uv run python beir_benchmarks.py --benchmark-type search_modes --vector-db-provider-id remote-milvus
 ```
-
-## Supported Embedding Models
-
-Default supported embedding models:
-- `granite-embedding-30m`: IBM Granite 30M parameter embedding model
-- `granite-embedding-125m`: IBM Granite 125M parameter embedding model
-
-It is possible to add more embedding models using the [Llama Stack Python Client](https://github.com/llamastack/llama-stack-client-python)
-
-### Adding additional embedding models
-Below is an example of how you can add more embedding models to the models list.
-``` bash
-# First run the llama stack server via the run file
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run llama stack run run.yaml
-```
-``` bash
-# Adding the all-MiniLM-L6-v2 model via the llama-stack-client
-llama-stack-client models register all-MiniLM-L6-v2 --provider-id sentence-transformers --provider-model-id all-minilm:latest --metadata '{"embedding_dimension": 384}' --model-type embedding
-```
-> [!NOTE]
-> Shut down the Llama Stack server before running the benchmark
 
 ### Command-Line Options
+
+#### `--benchmark-type`
+**Description:** Specifies the benchmark to run.
+
+- **Type:** String
+- **Default:** `"embedding_models"`
+- **Options:** See [README](./README.md) for available benchmarks
+
+**Example:**
+``` bash
+# search mode benchmark
+--benchmark-type search_mode
+
+# embedding models benchmark
+--benchmark-type embedding_models
+```
+
+#### `--search-modes`
+**Description:** Specifies which search modes to use for benchmarking.
+
+- **Type:** List of strings
+- **Default:** `["vector", "keyword", "hybrid"]`
+- **Options:** Any search mode from this list `["vector", "keyword", "hybrid"]`
+- **Note:** When using different search modes ensure the vector db you are using supports them
+
+**Example:**
+```bash
+# Single search mode
+--search-modes vector
+
+# Multiple search modes
+--search-modes hybrid keyword
+```
+
+#### `--vector-db-provider-id`
+**Description:** Specifies the Vector Database provider
+
+- **Type:** String
+- **Default:** `"milvus"`
+- **Options:** Any [vector io provider](https://llama-stack.readthedocs.io/en/latest/providers/vector_io/index.html#providers) as long as it is added to the [run.yaml](./run.yaml) file.
+- **Note:** When selecting a vector db provider id ensure it supports the search modes you are benchmarking.
+
+**Example:**
+``` bash
+# inline milvus provider id
+--vector-db-provider-id milvus
+
+# remote milvus provider id
+--vector-db-provider-id remote-milvus
+```
 
 #### `--dataset-names`
 **Description:** Specifies which BEIR datasets to use for benchmarking.
@@ -72,23 +105,6 @@ llama-stack-client models register all-MiniLM-L6-v2 --provider-id sentence-trans
 
 # Multiple datasets
 --dataset-names scifact scidocs nq
-```
-
-#### `--embedding-models`
-**Description:** Specifies which embedding models to benchmark against each other.
-
-- **Type:** List of strings
-- **Default:** `["granite-embedding-30m", "granite-embedding-125m"]`
-- **Requirement:** Embedding models must be defined in the `run.yaml` file
-- **Purpose:** Compare performance across different embedding models
-
-**Example:**
-```bash
-# Default models
---embedding-models granite-embedding-30m granite-embedding-125m
-
-# Custom model selection
---embedding-models all-MiniLM-L6-v2 granite-embedding-125m
 ```
 
 #### `--custom-datasets-urls`
@@ -120,23 +136,6 @@ llama-stack-client models register all-MiniLM-L6-v2 --provider-id sentence-trans
 
 # Using larger batch size for faster processing
 --batch-size 300
-```
-
-#### `--vector-db-provider-id`
-**Description:** Specifies the Vector Database provider
-
-- **Type:** String
-- **Default:** `"milvus"`
-- **Options:** Any [vector io provider](https://llama-stack.readthedocs.io/en/latest/providers/vector_io/index.html#providers) as long as it is added to the [run.yaml](./run.yaml) file.
-- **Note:** When selecting a vector db provider id ensure it supports the search modes you are benchmarking.
-
-**Example:**
-``` bash
-# inline milvus provider id
---vector-db-provider-id milvus
-
-# remote milvus provider id
---vector-db-provider-id remote-milvus
 ```
 
 > [!NOTE]
@@ -173,29 +172,27 @@ dataset-name.zip/
 
 **Basic benchmarking with default settings:**
 ```bash
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run python beir_benchmarks.py
+OLLAMA_URL=http://localhost:11434 ENABLE_MILVUS_REMOTE=milvus-remote uv run python beir_benchmarks.py --benchmark-type search_modes --vector-db-provider-id remote-milvus
 ```
 
 **Basic benchmarking with larger batch size:**
 ```bash
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run python beir_benchmarks.py --batch-size 300
+OLLAMA_URL=http://localhost:11434 ENABLE_MILVUS_REMOTE=milvus-remote uv run python beir_benchmarks.py --benchmark-type search_modes --vector-db-provider-id milvus-remote --batch-size 300
 ```
 
 **Benchmark multiple datasets:**
 ```bash
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run python beir_benchmarks.py \
- --dataset-names scifact scidocs
-```
-
-**Compare specific embedding models:**
-```bash
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run python beir_benchmarks.py \
-  --embedding-models granite-embedding-30m all-MiniLM-L6-v2
+OLLAMA_URL=http://localhost:11434 ENABLE_MILVUS_REMOTE=milvus-remote uv run python beir_benchmarks.py \
+  --benchmark-type search_modes \
+  --vector-db-provider-id milvus-remote \
+  --dataset-names scifact scidocs
 ```
 
 **Use custom datasets:**
 ```bash
-ENABLE_OLLAMA=ollama ENABLE_MILVUS=milvus OLLAMA_INFERENCE_MODEL="meta-llama/Llama-3.2-3B-Instruct" uv run python beir_benchmarks.py \
+OLLAMA_URL=http://localhost:11434 ENABLE_MILVUS_REMOTE=milvus-remote uv run python beir_benchmarks.py \
+  --benchmark-type search_modes \
+  --vector-db-provider-id milvus-remote \
   --dataset-names my-dataset \
   --custom-datasets-urls https://example.com/my-beir-dataset.zip
 ```

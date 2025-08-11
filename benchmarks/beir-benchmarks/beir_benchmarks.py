@@ -19,7 +19,7 @@ import pathlib
 from beir import util, LoggingHandler
 from beir.datasets.data_loader import GenericDataLoader
 
-from llama_stack.distribution.library_client import LlamaStackAsLibraryClient
+from llama_stack.core.library_client import LlamaStackAsLibraryClient
 from llama_stack.apis.tools import RAGQueryConfig
 from llama_stack_client.types import Document
 
@@ -33,11 +33,11 @@ import time
 DEFAULT_DATASET_NAMES = ["scifact"]
 DEFAULT_CUSTOM_DATASETS_URLS = []
 DEFAULT_EMBEDDING_MODELS = ["granite-embedding-30m", "granite-embedding-125m"]
-DEFAULT_BATCH_SIZE = 150
-
-"""
-TODO: Add an arg for specifying the benchmark type when new benchmarks are added.
-"""
+DEFAULT_BATCH_SIZE = 50  # Reduced from 150 to prevent memory issues
+DEFAULT_SEARCH_MODES = ["vector", "keyword", "hybrid"]
+DEFAULT_BENCHMARK_TYPE = "embedding_models"
+DEFAULT_VECTOR_DB_PROVIDER_ID = "milvus"  # Use milvus-remote for search mode benchmark
+# DEFAULT_LLAMA_STACK_SETUP =
 
 
 def parse_args():
@@ -72,8 +72,30 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=150,
-        help=f"Batch size for injecting documents (default: {DEFAULT_BATCH_SIZE})",
+        default=DEFAULT_BATCH_SIZE,
+        help=f"Batch size for injecting documents (default: {DEFAULT_BATCH_SIZE}). Large datasets automatically cap at 50.",
+    )
+
+    parser.add_argument(
+        "--search-modes",
+        nargs="+",
+        type=str,
+        default=DEFAULT_SEARCH_MODES,
+        help=f"List of search modes to evaluate (default: {DEFAULT_SEARCH_MODES})",
+    )
+
+    parser.add_argument(
+        "--benchmark-type",
+        type=str,
+        default=DEFAULT_BENCHMARK_TYPE,
+        help=f"Type of benchmark to evaluate (default: {DEFAULT_BENCHMARK_TYPE})",
+    )
+
+    parser.add_argument(
+        "--vector-db-provider-id",
+        type=str,
+        default=DEFAULT_VECTOR_DB_PROVIDER_ID,
+        help=f"Vector DB Provider ID (default: {DEFAULT_VECTOR_DB_PROVIDER_ID})",
     )
 
     return parser.parse_args()
@@ -114,7 +136,7 @@ class LlamaStackRAGRetriever:
             start_time = time.perf_counter()
             rag_results = self.llama_stack_client.tool_runtime.rag_tool.query(
                 vector_db_ids=[self.vector_db_id],
-                content=query,
+                content=f'"{query}"',
                 query_config={**self.query_config, "max_chunks": top_k},
             )
             end_time = time.perf_counter()
@@ -166,7 +188,17 @@ def inject_documents(
     corpus_items = list(corpus.items())
     total_docs = len(corpus_items)
 
+    # Adaptive batch sizing for large datasets to prevent memory issues
+    if total_docs > 10000:  # For large datasets like FIQA
+        batch_size = min(batch_size, 50)  # Cap at 50 for large datasets
+        print(
+            f"Large dataset detected ({total_docs} docs), reducing batch size to {batch_size}"
+        )
+
     print(f"Processing {total_docs} documents in batches of {batch_size}")
+
+    retry_count = 0
+    max_retries = 3
 
     for i in range(0, total_docs, batch_size):
         batch_items = corpus_items[i : i + batch_size]
@@ -184,12 +216,29 @@ def inject_documents(
             f"Inserting batch {i // batch_size + 1}/{(total_docs + batch_size - 1) // batch_size} ({len(documents_batch)} docs)"
         )
 
-        llama_stack_client.tool_runtime.rag_tool.insert(
-            documents=documents_batch,
-            vector_db_id=vector_db_id,
-            chunk_size_in_tokens=512,
-            timeout=3600,
-        )
+        # Add retry logic for memory/connection issues
+        while retry_count < max_retries:
+            try:
+                llama_stack_client.tool_runtime.rag_tool.insert(
+                    documents=documents_batch,
+                    vector_db_id=vector_db_id,
+                    chunk_size_in_tokens=512,
+                    timeout=3600,
+                )
+                retry_count = 0  # Reset retry count on success
+                break
+            except Exception as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    print(f"Failed to insert batch after {max_retries} retries: {e}")
+                    raise
+                print(
+                    f"Batch insertion failed (attempt {retry_count}/{max_retries}), retrying in 10 seconds..."
+                )
+                time.sleep(10)
+
+        # Add small delay between batches to prevent overwhelming the system
+        time.sleep(1)
 
     print(f"Successfully inserted all {total_docs} documents")
     return vector_db_id
@@ -286,6 +335,106 @@ def print_scores(all_scores: dict):
 
 
 """
+The BenchmarkSearchMode class is used to evaluate the retrieval performance of three types of search modes using the generic LlamaStack RAG Retriever.
+"""
+
+
+class BenchmarkSearchMode:
+    def __init__(
+        self,
+        llama_stack_client: LlamaStackAsLibraryClient,
+        datasets: list[str],
+        custom_datasets_urls: list[str],
+        batch_size: int,
+        vector_db_provider_id: str,
+        embedding_models: list[str],
+        search_modes: list[str],
+    ):
+        self.llama_stack_client = llama_stack_client
+        self.datasets = datasets
+        self.custom_datasets_urls = custom_datasets_urls
+        self.batch_size = batch_size
+        self.vector_db_provider_id = vector_db_provider_id
+        self.embedding_models = embedding_models
+        self.search_modes = search_modes
+
+    def evaluate_retrieval(
+        self,
+    ):
+        results_dir = os.path.join(pathlib.Path(__file__).parent.absolute(), "results")
+        all_scores = {}
+
+        custom_datasets_pairs = {}
+        if self.custom_datasets_urls:
+            custom_datasets_pairs = {
+                dataset_name: self.custom_datasets_urls[i]
+                for i, dataset_name in enumerate(self.datasets)
+            }
+
+        # Use the first embedding model for the benchmark
+        embedding_model = self.embedding_models[0]
+
+        for dataset_name in self.datasets:
+            all_scores[dataset_name] = {}
+            corpus, queries, qrels = load_beir_dataset(
+                dataset_name, custom_datasets_pairs
+            )
+            for search_mode in self.search_modes:
+                print(
+                    f"\n====================== Dataset: {dataset_name}, Search Mode: {search_mode} ======================"
+                )
+                print(f"Ingesting {dataset_name}, {embedding_model}")
+                vector_db_id = inject_documents(
+                    self.llama_stack_client,
+                    corpus,
+                    self.batch_size,
+                    self.vector_db_provider_id,
+                    embedding_model,
+                )
+
+                query_config = RAGQueryConfig(
+                    max_chunks=10, mode=search_mode
+                ).model_dump()
+                retriever = LlamaStackRAGRetriever(
+                    llama_stack_client, vector_db_id, query_config, top_k=10
+                )
+
+                print("Retrieving")
+                results, times = retriever.retrieve(queries, top_k=10)
+
+                print("Scoring")
+                k_values = [5, 10]
+
+                # This is a subset of the evaluation metrics used in beir.retrieval.evaluation.
+                # It formulates the metric strings at https://github.com/beir-cellar/beir/blob/main/beir/retrieval/evaluation.py#L61
+                # and then calls pytrec_eval.RelevanceEvaluator.  We call pytrec_eval.RelevanceEvaluator directly using some of
+                # those strings because we want not only the overall averages (which beir.retrieval.evaluation provides) but also
+                # the scores for each question so we can compute statistical significance.
+                map_string = "map_cut." + ",".join([str(k) for k in k_values])
+                ndcg_string = "ndcg_cut." + ",".join([str(k) for k in k_values])
+                metrics_strings = {ndcg_string, map_string}
+
+                evaluator = pytrec_eval.RelevanceEvaluator(qrels, metrics_strings)
+                scores = evaluator.evaluate(results)
+                for qid, scores_for_qid in scores.items():
+                    scores_for_qid["time"] = times[qid]
+
+                all_scores[dataset_name][search_mode] = scores
+
+                os.makedirs(results_dir, exist_ok=True)
+                util.save_runfile(
+                    os.path.join(
+                        results_dir,
+                        f"{dataset_name}-{vector_db_id}-{search_mode}.run.trec",
+                    ),
+                    results,
+                )
+        print(f"All results in {results_dir}\n")
+
+        return all_scores
+
+
+"""
 The BenchmarkEmbeddingModels class is used to evaluate the retrieval performance of the embedding models using the generic LlamaStack RAG Retriever.
 """
 
@@ -327,7 +476,7 @@ class BenchmarkEmbeddingModels:
             )
             for embedding_model in self.embedding_models:
                 print(
-                    f"\n====================== {dataset_name}, {embedding_model} ======================"
+                    f"\n====================== Dataset: {dataset_name}, Embedding Model: {embedding_model} ======================"
                 )
                 print(f"Ingesting {dataset_name}, {embedding_model}")
                 vector_db_id = inject_documents(
@@ -391,37 +540,40 @@ if __name__ == "__main__":
             f"Got URLs: {args.custom_datasets_urls}, dataset names: {args.dataset_names}"
         )
 
-    # Run LlamaStack Client
-    llama_stack_client = LlamaStackAsLibraryClient("./run.yaml")
-    llama_stack_client.initialize()
+    # Set up LlamaStack Client
+    llama_stack_client = LlamaStackAsLibraryClient(
+        os.path.join(pathlib.Path(__file__).parent.absolute(), "run.yaml")
+    )
 
-    """
-    TODO: When adding a new benchmark add a check to see which of the available benchmarks to use and set a generic variable to the benchmark class.
-    e.g.
-    benchmark = None
-    if args.benchmark_type == "embedding_models":
-        benchmark = BenchmarkEmbeddingModels(
+    benchmark_types = {
+        "embedding_models": lambda: BenchmarkEmbeddingModels(
             llama_stack_client,
             args.dataset_names,
             args.custom_datasets_urls,
             args.batch_size,
-            "milvus",
+            args.vector_db_provider_id,
             args.embedding_models,
-        )
-    elif args.benchmark_type == "benchmark2":
-        benchmark = Benchmark2(...)
+        ),
+        "search_modes": lambda: BenchmarkSearchMode(
+            llama_stack_client,
+            args.dataset_names,
+            args.custom_datasets_urls,
+            args.batch_size,
+            args.vector_db_provider_id,
+            args.embedding_models,
+            args.search_modes,
+        ),
+    }
 
-    benchmark.evaluate_retrieval(...)    
-    """
-    embedding_models_benchmark = BenchmarkEmbeddingModels(
-        llama_stack_client,
-        args.dataset_names,
-        args.custom_datasets_urls,
-        args.batch_size,
-        "milvus",
-        args.embedding_models,
-    )
-    all_scores = embedding_models_benchmark.evaluate_retrieval()
+    try:
+        benchmark = benchmark_types[args.benchmark_type]()
+    except KeyError:
+        raise ValueError(f"Invalid benchmark type: {args.benchmark_type}")
+
+    # Run LlamaStack Client
+    llama_stack_client.initialize()
+
+    all_scores = benchmark.evaluate_retrieval()
     print_scores(all_scores)
 
 """

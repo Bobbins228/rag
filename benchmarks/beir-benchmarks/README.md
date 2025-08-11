@@ -4,8 +4,18 @@
 The purpose of this script is to provide a variety of different benchmarks users can run with Llama Stack using standardized information retrieval benchmarks from the [BEIR](https://github.com/beir-cellar/beir) framework.
 
 ## Available Benchmarks
-Currently there is only one benchmark available:
+Currently there two benchmarks available:
 1. [Benchmarking embedding models with BEIR Datasets and Llama Stack](benchmarking_embedding_models.md)
+2. [Benchmarking Vector DB search modes with BEIR Datasets and Llama Stack](benchmarking_search_modes.md)
+
+They can be selected when running the script with the following flags:
+``` bash
+# Runs the embedding models benchmark
+--benchmark-type embedding_models
+
+# Runs the search modes benchmark
+--benchmark-type search_modes
+```
 
 
 ## Prerequisites
