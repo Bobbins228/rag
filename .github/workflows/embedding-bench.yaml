@@ -55,6 +55,9 @@ jobs:
       - name: Run the Benchmark
         id: benchmark
         run: |
+          set -e
+          set -o pipefail
+
           echo "Using the following dataset names: ${{ inputs.dataset-names }}"
           echo "Using the following embedding models: ${{ inputs.embedding-models }}"
           echo "Using the following batch size: ${{ inputs.batch-size }}"
